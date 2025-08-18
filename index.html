@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI App</title>
+  <link rel="stylesheet" href="style.css"/>
+  <script src="https://unpkg.com/alan-sdk-web/dist/alan.min.js" defer></script>
+  <script src="script.js" defer></script>
+</head>
+<body>
+
+  <!-- Mic status + toast -->
+  <div class="top-bar">
+    <span id="mic-status" class="badge idle">● idle</span>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Logo -->
+  <div class="logo">
+    <img src="images/logo.jpg" alt="logo">
+  </div>
+
+  <!-- Speak Section -->
+  <div class="speak-section">
+    <h2 class="one">🎤 Get the News</h2>
+    <h2 class="two">Give Your Voice, Get the World — AI Delivers the Latest News at the Speed of Thought!</h2>
+
+    <!-- NEW: controls row next to mic -->
+    <div class="controls">
+      <button id="start-btn" aria-label="Start listening"><p class="content">🎤 Speak</p></button>
+      <button id="pause-btn" class="mini-btn" aria-label="Pause or resume">⏸️ Pause</button>
+      <button id="stop-btn"  class="mini-btn danger" aria-label="Stop listening">⛔ Stop</button>
+
+      <label class="lang-wrap" for="lang-select">🌐
+        <select id="lang-select" aria-label="Recognition & TTS language">
+          <option value="en-US" selected>English (US)</option>
+          <option value="hi-IN">हिन्दी (India)</option>
+          
+
+        </select>
+      </label>
+    </div>
+
+    <input type="text" id="spoken-text" placeholder="Your speech will appear here..." readonly>
+  </div>
+
+  <!-- Info Cards -->
+  <div class="cards">
+    <div class="card teal">
+      <div class="card-content">
+        <h2>Latest News</h2>
+      </div>
+      <div class="card-footer">
+        <p>Try saying:</p>
+        <em>Show me the latest news</em>
+      </div>
+    </div>
+
+    <div class="card blue">
+      <div class="card-content">
+        <h2>News by Categories</h2>
+        <p><strong>Categories:</strong> Business, Entertainment, General, Health, Science, Sports, Technology</p>
+      </div>
+      <div class="card-footer">
+        <p>Try saying:</p>
+        <em>Give me the latest Technology news</em>
+      </div>
+    </div>
+
+    <div class="card purple">
+      <div class="card-content">
+        <h2>News by Terms</h2>
+        <p><strong>Terms:</strong> Bitcoin, PlayStation 5, Smartphones, Donald Trump...</p>
+      </div>
+      <div class="card-footer">
+        <p>Try saying:</p>
+        <em>What's up with PlayStation 5</em>
+      </div>
+    </div>
+
+    <div class="card darkblue">
+      <div class="card-content">
+        <h2>News by Sources</h2>
+        <p><strong>Sources:</strong> CNN, Wired, BBC News, Time, IGN, Buzzfeed, ABC News...</p>
+      </div>
+      <div class="card-footer">
+        <p>Try saying:</p>
+        <em>Give me the news from CNN</em>
+      </div>
+    </div>
+  </div>
+
+  <!-- News Container -->
+ <!-- News Container -->
+<div id="news-container" class="news-grid"></div>
+
+
+  <!-- Footer -->
+  <footer>
+    Created by <a href="#">Hanumanth</a>
+  </footer>
+
+</body>
+</html>
