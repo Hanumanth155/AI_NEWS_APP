@@ -69,35 +69,10 @@ body {
   border: none; outline: none; text-align: center; color: #1c1c1c;
 }
 
-.one {
-  color: black;  /* headline color */
-  text-align: center;
-  font-size: 1.5rem;   /* good for mobile */
-  font-weight: bold;
-  margin: 10px auto;
-}
-
-.two {
-  color: #555;  /* dark gray for subheading */
-  text-align: center;
-  font-size: 1rem;
-  margin-bottom: 15px;
-}
-
-/* Ensure it is visible on all screen sizes */
-@media (max-width: 768px) {
-  .one {
-    font-size: 1.2rem; /* smaller for mobile */
-  }
-  .two {
-    font-size: 0.9rem;
-  }
-}
-
+.one{ margin-top: 5px; margin-left: -15px; margin-bottom: 2px; }
+.two{ margin-top: 5px; }
 .one, .two { animation: colorShift 3s infinite alternate; }
-@keyframes colorShift { 0%{color:#99ccff} 50%{color:#eef2f5} 100%{color:#99ccff} }
-
-
+@keyframes colorShift { 0%{color:#966730} 50%{color:#eef2f5} 100%{color:#99ccff} }
 
 /* Cards */
 .cards {
