@@ -317,35 +317,67 @@ function handleCommand(command) {
   else toast("❌ Sorry, I couldn't understand. Try 'latest news', 'technology news', 'news about bitcoin', or 'क्रिकेट समाचार'.");
 }
 
-function fetchNewsByUrl(url) {
+async function fetchNewsByUrl(url) {
   // Show loading
   newsContainer.innerHTML = '<p style="padding:10px;">Loading news...</p>';
-  // Ensure 2-column layout
-  try {
-    newsContainer.style.display = 'grid';
-    newsContainer.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
-    newsContainer.style.gap = '16px';
-  } catch {}
+  newsContainer.style.display = 'grid';
+  newsContainer.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
+  newsContainer.style.gap = '16px';
 
-  fetch(url)
-    .then(res => res.json())
-    .then(data => {
-      if (data.articles && data.articles.length > 0) {
-        currentArticles = data.articles;
-        renderNewsArticles(data.articles);
-        speak(localize("fetched_count", { n: data.articles.length }));
-        setTimeout(() => newsContainer.scrollIntoView({ behavior: 'smooth' }), 200);
-      } else {
-        newsContainer.innerHTML = '<p style="padding:10px;">No news articles found.</p>';
-        speak(localize("no_news"));
+  try {
+    const lc = LANGS[currentLangKey];
+    let lang = lc?.lang || "en";
+
+    let res = await fetch(url);
+    let data = await res.json();
+
+    // ✅ If Hindi chosen and no articles found → fallback to English
+    if ((!data.articles || data.articles.length === 0) && lang === "hi") {
+      const fallbackUrl = url.replace("lang=hi", "lang=en");
+      console.log("⚠️ No Hindi articles. Falling back to English:", fallbackUrl);
+      res = await fetch(fallbackUrl);
+      data = await res.json();
+    }
+
+    if (!data.articles || data.articles.length === 0) {
+      newsContainer.innerHTML = '<p style="padding:10px;">No news articles found.</p>';
+      speak(localize("no_news"));
+      return;
+    }
+
+    let articles = data.articles;
+
+    // 🔥 If Hindi selected → translate fetched (English) articles
+    if (lang === "hi") {
+      for (let i = 0; i < articles.length; i++) {
+        const a = articles[i];
+        try {
+          const translated = await callGemini(
+            `Translate this news headline and description into Hindi:\n\nTITLE: ${a.title || ""}\n\nDESCRIPTION: ${a.description || ""}`
+          );
+          // Simple split: first line = title, rest = description
+          const [firstLine, ...rest] = translated.split("\n");
+          a.title = firstLine.trim() || a.title;
+          a.description = rest.join(" ").trim() || a.description;
+        } catch (e) {
+          console.error("Translation failed for article", i, e);
+        }
       }
-    })
-    .catch(err => {
-      console.error('Error fetching news:', err);
-      newsContainer.innerHTML = '<p style="padding:10px;">Error fetching news. Try again later.</p>';
-      speak(localize("error_news"));
-    });
+    }
+
+    currentArticles = articles;
+    renderNewsArticles(articles);
+    speak(localize("fetched_count", { n: articles.length }));
+    setTimeout(() => newsContainer.scrollIntoView({ behavior: 'smooth' }), 200);
+
+  } catch (err) {
+    console.error('Error fetching news:', err);
+    newsContainer.innerHTML = '<p style="padding:10px;">Error fetching news. Try again later.</p>';
+    speak(localize("error_news"));
+  }
 }
+
+
 
 function renderNewsArticles(articles) {
   newsContainer.innerHTML = '';
