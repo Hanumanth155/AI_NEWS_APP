@@ -2,10 +2,10 @@
    CONFIG
    ========================= */
 // GNews API Key (yours as you used before)
-const API_KEY = "e4ed7150d90492b1f11a172f121448e6";
+const API_KEY = "";
 
 // Gemini API (frontend demo — you used this before)
-const GEMINI_API_KEY = "AIzaSyBRTT9x4VlmQoz3Vhxowljt11wLe6pK3mw";
+const GEMINI_API_KEY = "";
 const GEMINI_MODEL = "gemini-1.5-flash-latest";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
@@ -656,3 +656,4 @@ function localize(key, vars = {}) {
   };
   return strings[lang][key] || strings.en[key] || "";
 }
+
