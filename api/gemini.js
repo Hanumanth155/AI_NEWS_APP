@@ -1,31 +1,32 @@
-// /api/gemini.js
 export default async function handler(req, res) {
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+  if (!GEMINI_API_KEY) return res.status(500).json({ error: "Missing GEMINI_API_KEY" });
+
   try {
-    const body = await req.json();
-    const { prompt } = body;
+    const { prompt } = req.body;
+    if (!prompt) return res.status(400).json({ error: "Missing prompt" });
 
-    const apiKey = process.env.GEMINI_API_KEY; // 🔒 store in env vars
-    if (!apiKey) {
-      return res.status(500).json({ error: "GEMINI_API_KEY not set" });
-    }
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
+    const body = {
+      contents: [{ parts: [{ text: prompt }]}],
+      safetySettings: [
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" }
+      ]
+    };
 
-    const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" +
-        apiKey,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-        }),
-      }
-    );
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
 
     const data = await response.json();
-    return res.status(200).json(data);
-  } catch (error) {
-    return res
-      .status(500)
-      .json({ error: "Failed to fetch AI response", details: error.message });
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    res.status(200).json({ text: text.trim() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 }
