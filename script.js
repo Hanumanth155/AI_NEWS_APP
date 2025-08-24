@@ -1,42 +1,53 @@
 /* =========================
-   CONFIG
+   CONFIG (no keys in frontend)
    ========================= */
-/* Note: API keys are now hidden in serverless functions on Vercel */
-
-// Gemini & GNews serverless endpoints
 const GNEWS_API = "/api/gnews";
 const GEMINI_API = "/api/gemini";
+
+/* English only */
+const LANGS = {
+  "en-US": { lang: "en", country: "us", label: "English (US)" },
+};
 
 /* =========================
    ENGLISH INTENTS ONLY
    ========================= */
 const INTENTS = {
-  latest: ["latest news","headlines","breaking news","top news"],
+  latest: ["latest news", "headlines", "breaking news", "top news"],
   categories: {
     business: ["business"],
     entertainment: ["entertainment"],
     general: ["general"],
     health: ["health"],
     science: ["science"],
-    sports: ["sports","cricket","football"],
-    technology: ["technology"]
-  }
+    sports: ["sports", "cricket", "football"],
+    technology: ["technology"],
+  },
 };
 
-/* For yes/no confirmation */
-const YES_WORDS = ["yes","yeah","yup","sure","ok","okay"];
-const NO_WORDS  = ["no","nope","nah"];
+/* Yes/No words */
+const YES_WORDS = ["yes", "yeah", "yup", "sure", "ok", "okay"];
+const NO_WORDS = ["no", "nope", "nah"];
 
 /* =========================
    DOM
    ========================= */
-const startBtn = document.getElementById('start-btn');
-const pauseBtn = document.getElementById('pause-btn');
-const stopBtn  = document.getElementById('stop-btn');
+const startBtn = document.getElementById("start-btn");
+const pauseBtn = document.getElementById("pause-btn");
+const stopBtn = document.getElementById("stop-btn");
+const newsContainer = document.getElementById("news-container");
+const micBadge = document.getElementById("mic-status");
+const toastEl = document.getElementById("toast");
 
-const newsContainer = document.getElementById('news-container');
-const micBadge = document.getElementById('mic-status');
-const toastEl = document.getElementById('toast');
+// Transcript div to show recognized text
+let transcriptEl = document.getElementById("transcript");
+if (!transcriptEl) {
+  transcriptEl = document.createElement("div");
+  transcriptEl.id = "transcript";
+  transcriptEl.style.cssText =
+    "padding:6px 10px; border:1px solid #ccc; min-height:24px; margin-bottom:8px;";
+  document.body.insertBefore(transcriptEl, newsContainer);
+}
 
 let recognition;
 let currentArticles = [];
@@ -50,12 +61,15 @@ let pendingReadText = "";
 
 /* TTS voice matching */
 let ttsVoice = null;
-function refreshVoices(){
-  try{
+function refreshVoices() {
+  try {
     const voices = speechSynthesis.getVoices() || [];
-    const langPrefix = currentLangKey.split('-')[0].toLowerCase();
-    ttsVoice = voices.find(v => (v.lang || "").toLowerCase().startsWith(langPrefix)) || null;
-  }catch{}
+    const langPrefix = currentLangKey.split("-")[0].toLowerCase();
+    ttsVoice =
+      voices.find((v) =>
+        (v.lang || "").toLowerCase().startsWith(langPrefix)
+      ) || null;
+  } catch {}
 }
 if (typeof speechSynthesis !== "undefined") {
   speechSynthesis.onvoiceschanged = refreshVoices;
@@ -65,52 +79,60 @@ if (typeof speechSynthesis !== "undefined") {
 /* =========================
    SPEECH RECOGNITION
    ========================= */
-if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
+  const SpeechRecognition =
+    window.SpeechRecognition || window.webkitSpeechRecognition;
   recognition = new SpeechRecognition();
   recognition.lang = currentLangKey;
   recognition.interimResults = false;
   recognition.continuous = true;
   recognition.maxAlternatives = 1;
 
-  startBtn.addEventListener('click', () => {
+  startBtn.addEventListener("click", () => {
     if (!isListening) {
       isListening = true;
-      recognition.lang = currentLangKey;
       recognition.start();
-      setMic('live');
+      setMic("live");
       startBtn.innerHTML = '<p class="content">🎙 Listening...</p>';
       playSound("start");
     }
   });
 
-  if (pauseBtn){
-    pauseBtn.addEventListener('click', () => {
-      if (!isListening) { toast("Start listening first."); return; }
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", () => {
+      if (!isListening) {
+        toast("Start listening first.");
+        return;
+      }
       if (!isPaused) {
         isPaused = true;
-        setMic('paused');
+        setMic("paused");
         pauseBtn.textContent = "▶️ Resume";
         speak("Listening paused.");
       } else {
         isPaused = false;
-        setMic('live');
+        setMic("live");
         pauseBtn.textContent = "⏸️ Pause";
         speak("Resumed listening.");
       }
     });
   }
 
-  if (stopBtn){
-    stopBtn.addEventListener('click', () => stopListening());
+  if (stopBtn) {
+    stopBtn.addEventListener("click", () => stopListening());
   }
 
-  recognition.addEventListener('result', (event) => {
-    const speechResult = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
-    const spokenBox = document.getElementById("spoken-text");
-    if (spokenBox) spokenBox.value = speechResult;
+  recognition.addEventListener("result", (event) => {
+    const speechResult =
+      event.results[event.results.length - 1][0].transcript
+        .toLowerCase()
+        .trim();
+
+    // Show live transcript
+    transcriptEl.textContent = speechResult;
     console.log("Heard:", speechResult);
 
+    // Handle pending yes/no confirmation first
     if (awaitingReadConfirm) {
       if (isAffirmative(speechResult)) {
         if (pendingReadText) speak(pendingReadText);
@@ -122,31 +144,34 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       return;
     }
 
+    // Global controls
     if (speechResult.includes("stop listening") || speechResult === "stop") {
       stopListening();
       return;
     }
     if (speechResult.includes("pause listening")) {
       isPaused = true;
-      setMic('paused');
+      setMic("paused");
       if (pauseBtn) pauseBtn.textContent = "▶️ Resume";
       speak("Listening paused. Say 'resume listening' to continue.");
       return;
     }
     if (speechResult.includes("resume listening")) {
       isPaused = false;
-      setMic('live');
+      setMic("live");
       if (pauseBtn) pauseBtn.textContent = "⏸️ Pause";
       speak("Resumed listening.");
       return;
     }
     if (isPaused) return;
 
+    // Voice features
     if (speechResult.includes("read the headlines")) {
       readHeadlines();
       return;
     }
 
+    // Summarize article N
     const sumMatch = speechResult.match(/summarize (article )?(\d+)/);
     if (sumMatch) {
       const idx = parseInt(sumMatch[2], 10) - 1;
@@ -154,59 +179,90 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       return;
     }
 
-    if (speechResult.match(/(select|open)\s*\d+/) || speechResult.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/)) {
+    // Open/select article N
+    if (
+      speechResult.match(/(select|open)\s*\d+/) ||
+      speechResult.match(
+        /\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/
+      )
+    ) {
       handleSelection(speechResult);
       return;
     }
 
+    // Fetch news intents
     if (
-      INTENTS.latest.some(k => speechResult.includes(k)) ||
-      Object.values(INTENTS.categories).some(cat => cat.some(k => speechResult.includes(k))) ||
+      INTENTS.latest.some((k) => speechResult.includes(k)) ||
+      Object.values(INTENTS.categories).some((cat) =>
+        cat.some((k) => speechResult.includes(k))
+      ) ||
       speechResult.includes("news")
     ) {
       handleCommand(speechResult);
       return;
     }
 
-    toast("❌ Command not recognized. Try: 'latest news', 'read the headlines', 'summarize 2', or 'open 3'.");
+    toast(
+      "❌ Command not recognized. Try: 'latest news', 'read the headlines', 'summarize 2', or 'open 3'."
+    );
   });
 
-  recognition.addEventListener('end', () => {
-    if (isListening) recognition.start();
+  recognition.addEventListener("end", () => {
+    if (isListening) recognition.start(); // auto-restart
   });
 
   recognition.onerror = (event) => {
     console.error("Speech recognition error:", event.error);
     toast("🎤 Mic error: " + event.error);
-    setMic('idle');
+    setMic("idle");
   };
 } else {
-  alert('Speech Recognition not supported in your browser.');
+  alert("Speech Recognition not supported in your browser.");
 }
 
+/* =========================
+   UTILS
+   ========================= */
 function stopListening() {
   isListening = false;
   isPaused = false;
   awaitingReadConfirm = false;
   pendingReadText = "";
   recognition && recognition.stop();
-  setMic('idle');
+  setMic("idle");
   startBtn.innerHTML = '<p class="content">🎤 Speak</p>';
   if (pauseBtn) pauseBtn.textContent = "⏸️ Pause";
+  transcriptEl.textContent = "";
   playSound("stop");
   console.log("Stopped listening");
 }
 
 function setMic(state) {
   if (!micBadge) return;
-  micBadge.classList.remove('idle', 'live', 'paused');
+  micBadge.classList.remove("idle", "live", "paused");
   micBadge.classList.add(state);
-  micBadge.textContent = state === 'live' ? '● listening' : state === 'paused' ? '● paused' : '● idle';
+  micBadge.textContent =
+    state === "live" ? "● listening" : state === "paused" ? "● paused" : "● idle";
+}
+
+function isAffirmative(text) {
+  return YES_WORDS.some((w) => text.includes(w.toLowerCase()));
+}
+function isNegative(text) {
+  return NO_WORDS.some((w) => text.includes(w.toLowerCase()));
+}
+
+function resetReadConfirm() {
+  awaitingReadConfirm = false;
+  pendingReadText = "";
 }
 
 /* =========================
-   NEWS FETCH (via Vercel serverless)
+   NEWS / AI LOGIC (unchanged)
    ========================= */
+// handleCommand(), fetchNewsByUrl(), renderNewsArticles(), handleSelection(),
+// summarizeArticle(), keyPoints(), sentiment(), askArticle(), etc.
+// keep as in your current code
 function handleCommand(command) {
   let category = "general";
   let query = "";
@@ -394,4 +450,5 @@ function localize(key, vars = {}) {
   };
   return strings[lang][key] || strings.en[key] || "";
 }
+
 
