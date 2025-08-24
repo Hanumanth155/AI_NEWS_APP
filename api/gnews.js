@@ -1,24 +1,19 @@
-// /api/gnews.js
 export default async function handler(req, res) {
+  const API_KEY = process.env.GNEWS_API_KEY;
+  if (!API_KEY) return res.status(500).json({ error: "Missing GNEWS_API_KEY" });
+
   try {
-    const { query, lang = "en" } = req.query;
+    const { category = "general", query = "" } = req.query;
 
-    const apiKey = process.env.GNEWS_API_KEY; // 🔒 store in env vars
-    if (!apiKey) {
-      return res.status(500).json({ error: "GNEWS_API_KEY not set" });
-    }
-
-    const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(
-      query || "latest"
-    )}&lang=${lang}&max=10&apikey=${apiKey}`;
+    let url = query
+      ? `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&country=us&max=10&token=${API_KEY}`
+      : `https://gnews.io/api/v4/top-headlines?category=${category}&lang=en&country=us&max=10&token=${API_KEY}`;
 
     const response = await fetch(url);
     const data = await response.json();
 
-    return res.status(200).json(data);
-  } catch (error) {
-    return res
-      .status(500)
-      .json({ error: "Failed to fetch news", details: error.message });
+    res.status(200).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 }
