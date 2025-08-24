@@ -1,47 +1,65 @@
+/* =======================================================================================
+   AI News App — Frontend (serverless-friendly, robust SpeechRecognition + TTS)
+   ---------------------------------------------------------------------------------------
+   - Do NOT put API keys here. GNews/Gemini calls go through /api/gnews and /api/gemini.
+   - Stronger Speak button behavior:
+       • HTTPS origin check
+       • Mic permission preflight (getUserMedia)
+       • Resilient RESTART loop (no runaway restarts)
+       • Pause/Resume/Stop safe-guards
+       • Visible mic status + toasts
+       • TTS voice matching + cancel before new utterances
+   - Fully compatible with your existing HTML/CSS.
+   ======================================================================================= */
+
 /* =========================
    CONFIG (serverless-friendly)
    ========================= */
-// ⚠️ Keys are no longer stored in the frontend.
-// Put your keys server-side in /api/gnews and /api/gemini.
-// Kept constants for model name only:
+// Model name only; keys live on serverless.
 const GEMINI_MODEL = "gemini-1.5-flash-latest";
 
 // Minimal LANGS guard so localize() can read it safely
 // (If you already define LANGS elsewhere, this will just be harmless.)
-const LANGS = typeof LANGS !== "undefined" ? LANGS : { "en-US": { lang: "en" } };
+/* eslint-disable no-var */ // allow browser globals if bundlers add ESLint
+var LANGS = typeof LANGS !== "undefined" ? LANGS : { "en-US": { lang: "en" } };
+/* eslint-enable no-var */
 
 /* =========================
    ENGLISH INTENTS ONLY
    ========================= */
 const INTENTS = {
-  latest: ["latest news","headlines","breaking news","top news"],
+  latest: ["latest news", "headlines", "breaking news", "top news"],
   categories: {
     business: ["business"],
     entertainment: ["entertainment"],
     general: ["general"],
     health: ["health"],
     science: ["science"],
-    sports: ["sports","cricket","football"],
-    technology: ["technology"]
-  }
+    sports: ["sports", "cricket", "football"],
+    technology: ["technology"],
+  },
 };
 
 /* For yes/no confirmation */
-const YES_WORDS = ["yes","yeah","yup","sure","ok","okay"];
-const NO_WORDS  = ["no","nope","nah"];
+const YES_WORDS = ["yes", "yeah", "yup", "sure", "ok", "okay", "affirmative", "please"];
+const NO_WORDS = ["no", "nope", "nah", "negative", "cancel"];
 
 /* =========================
-   DOM
+   DOM (safe refs)
    ========================= */
-const startBtn = document.getElementById('start-btn');
-const pauseBtn = document.getElementById('pause-btn');
-const stopBtn  = document.getElementById('stop-btn');
+const startBtn = document.getElementById("start-btn");
+const pauseBtn = document.getElementById("pause-btn");
+const stopBtn = document.getElementById("stop-btn");
 
-const newsContainer = document.getElementById('news-container');
-const micBadge = document.getElementById('mic-status');
-const toastEl = document.getElementById('toast');
+const newsContainer = document.getElementById("news-container");
+const micBadge = document.getElementById("mic-status");
+const toastEl = document.getElementById("toast");
+const spokenBox = document.getElementById("spoken-text");
 
-let recognition;
+/* =========================
+   STATE
+   ========================= */
+let recognition = null;
 let currentArticles = [];
 let isListening = false;
 let isPaused = false;
@@ -53,159 +71,407 @@ let pendingReadText = "";
 
 /* TTS voice matching */
 let ttsVoice = null;
-function refreshVoices(){
-  try{
-    const voices = speechSynthesis.getVoices() || [];
-    const langPrefix = currentLangKey.split('-')[0].toLowerCase();
-    ttsVoice = voices.find(v => (v.lang || "").toLowerCase().startsWith(langPrefix)) || null;
-  }catch{}
+
+/* Speech restart guard */
+let allowAutoRestart = true;
+let lastEndAt = 0;
+let restartTimer = null;
+
+/* Page visibility (avoid restarting while hidden) */
+let isPageHidden = false;
+
+/* =========================
+   UTILS — Toasts / Badges / SafeTimers
+   ========================= */
+function toast(msg, ms = 2000) {
+  if (!toastEl) {
+    alert(msg);
+    return;
+  }
+  toastEl.textContent = msg;
+  toastEl.classList.remove("hidden");
+  toastEl.style.display = "block";
+  setTimeout(() => {
+    toastEl.classList.add("hidden");
+    toastEl.style.display = "none";
+  }, ms);
 }
-if (typeof speechSynthesis !== "undefined") {
-  speechSynthesis.onvoiceschanged = refreshVoices;
-  refreshVoices();
+function setMic(state) {
+  if (!micBadge) return;
+  micBadge.classList.remove("idle", "live", "paused");
+  micBadge.classList.add(state);
+  micBadge.textContent =
+    state === "live" ? "● listening" : state === "paused" ? "● paused" : "● idle";
+}
+function safeClearTimer(t) {
+  if (t) {
+    clearTimeout(t);
+  }
+}
+function isSecureContext() {
+  // localhost is treated secure by browsers
+  return window.isSecureContext || location.protocol === "https:" || location.hostname === "localhost";
 }
 
 /* =========================
-   SPEECH RECOGNITION
+   TTS — Voices / Speak / Cancel
    ========================= */
-if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  recognition = new SpeechRecognition();
-  recognition.lang = currentLangKey;
-  recognition.interimResults = false;
-  recognition.continuous = true;
-  recognition.maxAlternatives = 1;
+function refreshVoices() {
+  try {
+    const voices = speechSynthesis.getVoices() || [];
+    const langPrefix = currentLangKey.split("-")[0].toLowerCase();
+    ttsVoice =
+      voices.find((v) => (v.lang || "").toLowerCase().startsWith(langPrefix)) || null;
+  } catch (e) {
+    // ignore
+  }
+}
 
-  startBtn.addEventListener('click', () => {
-    if (!isListening) {
-      isListening = true;
-      recognition.lang = currentLangKey;
-      recognition.start();
-      setMic('live');
-      startBtn.innerHTML = '<p class="content">🎙 Listening...</p>';
-      playSound("start");
+if (typeof speechSynthesis !== "undefined") {
+  try {
+    speechSynthesis.onvoiceschanged = refreshVoices;
+  } catch {}
+  refreshVoices();
+}
+
+function speak(text) {
+  try {
+    // Cancel any pending speech first (prevents queueing/overlap on rapid calls)
+    if (speechSynthesis && speechSynthesis.speaking) {
+      speechSynthesis.cancel();
     }
-  });
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = currentLangKey;
+    if (ttsVoice) u.voice = ttsVoice;
+    speechSynthesis.speak(u);
+  } catch {
+    // ignore
+  }
+}
+function stopSpeaking() {
+  try {
+    if (speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending)) {
+      speechSynthesis.cancel();
+    }
+  } catch {}
+}
 
-  if (pauseBtn){
-    pauseBtn.addEventListener('click', () => {
-      if (!isListening) { toast("Start listening first."); return; }
-      if (!isPaused) {
+/* =========================
+   PERMISSIONS / PREFLIGHT
+   ========================= */
+async function ensureMicPermission() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error("MediaDevices not available");
+  }
+  // Only ask if not already granted
+  const permStatus = await navigator.permissions
+    ?.query({ name: "microphone" })
+    .catch(() => null);
+  if (permStatus && permStatus.state === "granted") return true;
+
+  // Request single stream then stop immediately (preflight)
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach((t) => t.stop());
+  return true;
+}
+
+/* =========================
+   SPEECH RECOGNITION INIT
+   ========================= */
+function buildRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const r = new SR();
+  r.lang = currentLangKey;
+  r.interimResults = false; // final results only (stable UX)
+  r.continuous = true;
+  r.maxAlternatives = 1;
+  return r;
+}
+
+/* =========================
+   SPEECH EVENT WIRING
+   ========================= */
+function wireRecognitionEvents() {
+  if (!recognition) return;
+
+  recognition.onstart = () => {
+    setMic("live");
+    allowAutoRestart = true;
+    // Visual hint
+    if (startBtn) startBtn.innerHTML = '<p class="content">🎙 Listening...</p>';
+    // UX cue
+    // playSound("start"); // optional if you have mp3
+  };
+
+  recognition.onresult = (event) => {
+    try {
+      const res = event.results[event.results.length - 1];
+      const speechResult = (res && res[0] && res[0].transcript) ? String(res[0].transcript) : "";
+      const cleaned = speechResult.toLowerCase().trim();
+      if (spokenBox) spokenBox.value = cleaned;
+      console.log("Heard:", cleaned);
+
+      // Handle pending read confirm
+      if (awaitingReadConfirm) {
+        if (isAffirmative(cleaned)) {
+          if (pendingReadText) speak(pendingReadText);
+          resetReadConfirm();
+        } else if (isNegative(cleaned)) {
+          speak(localize("ok"));
+          resetReadConfirm();
+        }
+        return;
+      }
+
+      // Global voice commands
+      if (cleaned.includes("stop listening") || cleaned === "stop") {
+        stopListening();
+        return;
+      }
+      if (cleaned.includes("pause listening")) {
         isPaused = true;
-        setMic('paused');
-        pauseBtn.textContent = "▶️ Resume";
-        speak("Listening paused.");
-      } else {
+        setMic("paused");
+        if (pauseBtn) pauseBtn.textContent = "▶️ Resume";
+        speak(localize("paused_long"));
+        return;
+      }
+      if (cleaned.includes("resume listening")) {
         isPaused = false;
-        setMic('live');
-        pauseBtn.textContent = "⏸️ Pause";
-        speak("Resumed listening.");
+        setMic("live");
+        if (pauseBtn) pauseBtn.textContent = "⏸️ Pause";
+        speak(localize("resumed"));
+        return;
       }
-    });
-  }
+      if (isPaused) return;
 
-  if (stopBtn){
-    stopBtn.addEventListener('click', () => stopListening());
-  }
-
-  recognition.addEventListener('result', (event) => {
-    const speechResult = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
-    const spokenBox = document.getElementById("spoken-text");
-    if (spokenBox) spokenBox.value = speechResult;
-    console.log("Heard:", speechResult);
-
-    if (awaitingReadConfirm) {
-      if (isAffirmative(speechResult)) {
-        if (pendingReadText) speak(pendingReadText);
-        resetReadConfirm();
-      } else if (isNegative(speechResult)) {
-        speak("Okay.");
-        resetReadConfirm();
+      // Content commands
+      if (cleaned.includes("read the headlines")) {
+        readHeadlines();
+        return;
       }
-      return;
-    }
 
-    if (speechResult.includes("stop listening") || speechResult === "stop") {
-      stopListening();
-      return;
-    }
-    if (speechResult.includes("pause listening")) {
-      isPaused = true;
-      setMic('paused');
-      if (pauseBtn) pauseBtn.textContent = "▶️ Resume";
-      speak("Listening paused. Say 'resume listening' to continue.");
-      return;
-    }
-    if (speechResult.includes("resume listening")) {
-      isPaused = false;
-      setMic('live');
-      if (pauseBtn) pauseBtn.textContent = "⏸️ Pause";
-      speak("Resumed listening.");
-      return;
-    }
-    if (isPaused) return;
+      const sumMatch = cleaned.match(/summarize (article )?(\d+)/);
+      if (sumMatch) {
+        const idx = parseInt(sumMatch[2], 10) - 1;
+        summarizeArticle(idx);
+        return;
+      }
 
-    if (speechResult.includes("read the headlines")) {
-      readHeadlines();
-      return;
+      if (
+        cleaned.match(/(select|open)\s*\d+/) ||
+        cleaned.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/)
+      ) {
+        handleSelection(cleaned);
+        return;
+      }
+
+      if (
+        INTENTS.latest.some((k) => cleaned.includes(k)) ||
+        Object.values(INTENTS.categories).some((cat) =>
+          cat.some((k) => cleaned.includes(k))
+        ) ||
+        cleaned.includes("news")
+      ) {
+        handleCommand(cleaned);
+        return;
+      }
+
+      toast(
+        "❌ Command not recognized. Try: 'latest news', 'read the headlines', 'summarize 2', or 'open 3'."
+      );
+    } catch (err) {
+      console.error("onresult error:", err);
     }
-
-    const sumMatch = speechResult.match(/summarize (article )?(\d+)/);
-    if (sumMatch) {
-      const idx = parseInt(sumMatch[2], 10) - 1;
-      summarizeArticle(idx);
-      return;
-    }
-
-    if (speechResult.match(/(select|open)\s*\d+/) || speechResult.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/)) {
-      handleSelection(speechResult);
-      return;
-    }
-
-    if (
-      INTENTS.latest.some(k => speechResult.includes(k)) ||
-      Object.values(INTENTS.categories).some(cat => cat.some(k => speechResult.includes(k))) ||
-      speechResult.includes("news")
-    ) {
-      handleCommand(speechResult);
-      return;
-    }
-
-    toast("❌ Command not recognized. Try: 'latest news', 'read the headlines', 'summarize 2', or 'open 3'.");
-  });
-
-  recognition.addEventListener('end', () => {
-    if (isListening) recognition.start();
-  });
+  };
 
   recognition.onerror = (event) => {
     console.error("Speech recognition error:", event.error);
+    // Common errors to surface:
+    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      toast("🎤 Mic permission denied. Enable microphone access in your browser settings.");
+      stopListening(true);
+      return;
+    }
+    if (event.error === "no-speech") {
+      toast("🤐 No speech detected.");
+      return;
+    }
+    if (event.error === "aborted") {
+      // benign — happens on stop()
+      return;
+    }
     toast("🎤 Mic error: " + event.error);
-    setMic('idle');
   };
-} else {
-  alert('Speech Recognition not supported in your browser.');
+
+  recognition.onend = () => {
+    // Called when the engine naturally ends or on stop()
+    lastEndAt = Date.now();
+    setMic("idle");
+    if (startBtn) startBtn.innerHTML = '<p class="content">🎤 Speak</p>';
+
+    // Guarded auto-restart: only when user is listening, not paused, page visible, and short gap
+    if (isListening && !isPaused && allowAutoRestart && !isPageHidden) {
+      safeClearTimer(restartTimer);
+      restartTimer = setTimeout(() => {
+        try {
+          recognition && recognition.start();
+        } catch (e) {
+          console.warn("Restart failed:", e);
+        }
+      }, 350); // small debounce to avoid thrash
+    }
+  };
 }
 
-function stopListening() {
+/* =========================
+   LIFECYCLE — Start / Pause / Resume / Stop
+   ========================= */
+async function startListening() {
+  if (isListening) return;
+
+  // Basic HTTPS check — SpeechRecognition needs secure origins on most browsers
+  if (!isSecureContext()) {
+    toast("⚠️ Use HTTPS (or localhost) for microphone access.");
+    return;
+  }
+
+  // Ensure SpeechRecognition support
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    toast("❌ Speech Recognition not supported in this browser.");
+    return;
+  }
+
+  // Mic permission preflight (shows permission prompt on first use)
+  try {
+    await ensureMicPermission();
+  } catch (e) {
+    console.error("Mic preflight failed:", e);
+    toast("🎤 Please allow microphone access.");
+    return;
+  }
+
+  // Build (or rebuild) recognition if missing
+  if (!recognition) {
+    recognition = buildRecognition();
+    if (!recognition) {
+      toast("❌ Unable to initialize Speech Recognition.");
+      return;
+    }
+    wireRecognitionEvents();
+  }
+
+  // Update flags + UI
+  isListening = true;
+  isPaused = false;
+  allowAutoRestart = true;
+  setMic("live");
+  if (startBtn) startBtn.innerHTML = '<p class="content">🎙 Listening...</p>';
+
+  // Start engine
+  try {
+    recognition.start();
+  } catch (err) {
+    console.error("recognition.start() failed:", err);
+    toast("🎤 Could not start mic: " + err.message);
+    isListening = false;
+    setMic("idle");
+  }
+}
+
+function pauseListening() {
+  if (!isListening) {
+    toast("Start listening first.");
+    return;
+  }
+  if (isPaused) {
+    // resume
+    isPaused = false;
+    setMic("live");
+    if (pauseBtn) pauseBtn.textContent = "⏸️ Pause";
+    speak(localize("resumed"));
+    // restart recognition if needed
+    try {
+      recognition && recognition.start();
+    } catch (e) {
+      // if already running this may throw — ignore
+    }
+    return;
+  }
+  // pause
+  isPaused = true;
+  setMic("paused");
+  if (pauseBtn) pauseBtn.textContent = "▶️ Resume";
+  speak(localize("paused"));
+  try {
+    allowAutoRestart = false;
+    recognition && recognition.stop();
+  } catch {}
+}
+
+function stopListening(silent = false) {
   isListening = false;
   isPaused = false;
   awaitingReadConfirm = false;
   pendingReadText = "";
-  recognition && recognition.stop();
-  setMic('idle');
-  startBtn.innerHTML = '<p class="content">🎤 Speak</p>';
+  allowAutoRestart = false;
+  safeClearTimer(restartTimer);
+
+  try {
+    recognition && recognition.stop();
+  } catch {}
+  setMic("idle");
+  if (startBtn) startBtn.innerHTML = '<p class="content">🎤 Speak</p>';
   if (pauseBtn) pauseBtn.textContent = "⏸️ Pause";
-  playSound("stop");
+  if (!silent) {
+    // playSound("stop");
+  }
+  stopSpeaking();
   console.log("Stopped listening");
 }
 
-function setMic(state) {
-  if (!micBadge) return;
-  micBadge.classList.remove('idle', 'live', 'paused');
-  micBadge.classList.add(state);
-  micBadge.textContent = state === 'live' ? '● listening' : state === 'paused' ? '● paused' : '● idle';
+/* =========================
+   BUTTON WIRING
+   ========================= */
+if (startBtn) {
+  startBtn.addEventListener("click", () => {
+    startListening();
+  });
 }
+if (pauseBtn) {
+  pauseBtn.addEventListener("click", () => {
+    pauseListening();
+  });
+}
+if (stopBtn) {
+  stopBtn.addEventListener("click", () => {
+    stopListening();
+  });
+}
+
+/* Page visibility — don’t auto-restart while hidden */
+document.addEventListener("visibilitychange", () => {
+  isPageHidden = document.hidden;
+  if (isPageHidden) {
+    // suspend auto-restart
+    allowAutoRestart = false;
+    try {
+      recognition && recognition.stop();
+    } catch {}
+    setMic("idle");
+  } else {
+    // resume if user was listening
+    if (isListening && !isPaused) {
+      allowAutoRestart = true;
+      try {
+        recognition && recognition.start();
+      } catch (e) {
+        // may already be running
+      }
+    }
+  }
+});
 
 /* =========================
    NEWS FETCH (GNews via serverless)
@@ -215,22 +481,31 @@ function handleCommand(command) {
   const country = "us";
 
   let url = "";
-  const categories = ["business","entertainment","general","health","science","sports","technology"];
-  const sources = ["cnn","bbc","wired","time","ign","buzzfeed","abc"];
+  const categories = [
+    "business",
+    "entertainment",
+    "general",
+    "health",
+    "science",
+    "sports",
+    "technology",
+  ];
+  const sources = ["cnn", "bbc", "wired", "time", "ign", "buzzfeed", "abc"];
 
   // Build GNews URLs WITHOUT token (serverless adds it)
-  if (INTENTS.latest.some(k => command.includes(k))) {
+  if (INTENTS.latest.some((k) => command.includes(k))) {
     url = `https://gnews.io/api/v4/top-headlines?lang=${lang}&country=${country}&max=10`;
   }
 
   if (!url && command.includes("news from")) {
-    let foundSource = sources.find(src => command.includes(src));
-    if (foundSource) url = `https://gnews.io/api/v4/top-headlines?source=${foundSource}&lang=${lang}&country=${country}&max=10`;
+    let foundSource = sources.find((src) => command.includes(src));
+    if (foundSource)
+      url = `https://gnews.io/api/v4/top-headlines?source=${foundSource}&lang=${lang}&country=${country}&max=10`;
   }
 
   if (!url) {
     for (let cat of categories) {
-      const hit = INTENTS.categories[cat].some(k => command.includes(k));
+      const hit = INTENTS.categories[cat].some((k) => command.includes(k));
       if (hit) {
         url = `https://gnews.io/api/v4/top-headlines?category=${cat}&lang=${lang}&country=${country}&max=10`;
         break;
@@ -238,22 +513,33 @@ function handleCommand(command) {
     }
   }
 
-  if (!url && (command.includes("about") || command.includes("on") || command.includes("for") || command.includes("regarding"))) {
+  if (
+    !url &&
+    (command.includes("about") ||
+      command.includes("on") ||
+      command.includes("for") ||
+      command.includes("regarding"))
+  ) {
     let term = command.replace(/news|about|on|for|regarding/gi, "").trim();
     if (term) {
-      url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(term)}&lang=${lang}&country=${country}&max=10`;
+      url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(
+        term
+      )}&lang=${lang}&country=${country}&max=10`;
     }
   }
 
   if (url) fetchNewsByUrl(url);
-  else toast("❌ Sorry, I couldn't understand. Try 'latest news', 'technology news', or 'news about bitcoin'.");
+  else
+    toast(
+      "❌ Sorry, I couldn't understand. Try 'latest news', 'technology news', or 'news about bitcoin'."
+    );
 }
 
 async function fetchNewsByUrl(url) {
   newsContainer.innerHTML = '<p style="padding:10px;">Loading news...</p>';
-  newsContainer.style.display = 'grid';
-  newsContainer.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
-  newsContainer.style.gap = '16px';
+  newsContainer.style.display = "grid";
+  newsContainer.style.gridTemplateColumns = "repeat(2, minmax(0, 1fr))";
+  newsContainer.style.gap = "16px";
 
   try {
     // Call your serverless proxy instead of hitting GNews directly
@@ -263,49 +549,56 @@ async function fetchNewsByUrl(url) {
 
     if (!data.articles || data.articles.length === 0) {
       newsContainer.innerHTML = '<p style="padding:10px;">No news articles found.</p>';
-      speak("No news loaded yet.");
+      speak(localize("no_news"));
       return;
     }
 
     currentArticles = data.articles;
     renderNewsArticles(currentArticles);
     speak(`Fetched ${currentArticles.length} articles.`);
-    setTimeout(() => newsContainer.scrollIntoView({ behavior: 'smooth' }), 200);
-
+    setTimeout(() => newsContainer.scrollIntoView({ behavior: "smooth" }), 200);
   } catch (err) {
-    console.error('Error fetching news:', err);
-    newsContainer.innerHTML = '<p style="padding:10px;">Error fetching news. Try again later.</p>';
-    speak("Error fetching news.");
+    console.error("Error fetching news:", err);
+    newsContainer.innerHTML =
+      '<p style="padding:10px;">Error fetching news. Try again later.</p>';
+    speak(localize("error_news"));
   }
 }
 
 /* =========================
-   RENDER
+   RENDER — News Cards + AI Tools
    ========================= */
 function renderNewsArticles(articles) {
-  newsContainer.innerHTML = '';
+  newsContainer.innerHTML = "";
   // enforce 2 per row grid each time (in case external CSS overwrites)
-  newsContainer.style.display = 'grid';
-  newsContainer.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
-  newsContainer.style.gap = '16px';
+  newsContainer.style.display = "grid";
+  newsContainer.style.gridTemplateColumns = "repeat(2, minmax(0, 1fr))";
+  newsContainer.style.gap = "16px";
 
   articles.forEach((article, index) => {
-    const articleDiv = document.createElement('div');
-    articleDiv.className = 'article';
+    const articleDiv = document.createElement("div");
+    articleDiv.className = "article";
     articleDiv.dataset.index = index;
     articleDiv.style.cssText = `
       background:#fff;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,0.08);
       padding:12px;display:flex;flex-direction:column;gap:8px;
     `;
 
-    const imgHtml = article.image ? `<img src="${article.image}" alt="Image" style="width:100%;height:160px;object-fit:cover;border-radius:8px;"/>` : '';
+    const safeTitle = escapeHtml(article.title || "");
+    const safeDesc = escapeHtml(article.description || "");
+    const safeSource = escapeHtml(article.source?.name || "");
+    const imgHtml = article.image
+      ? `<img src="${article.image}" alt="Image" style="width:100%;height:160px;object-fit:cover;border-radius:8px;"/>`
+      : "";
 
     articleDiv.innerHTML = `
-      <h3 style="margin:0;font-size:16px;line-height:1.35;">${index + 1}. ${article.title || ''}</h3>
-      <p style="margin:0;color:#333;font-size:14px;">${article.description || ''}</p>
+      <h3 style="margin:0;font-size:16px;line-height:1.35;">${index + 1}. ${safeTitle}</h3>
+      <p style="margin:0;color:#333;font-size:14px;">${safeDesc}</p>
       ${imgHtml}
-      <p class="small-muted" style="margin:0;color:#777;font-size:12px;">${article.source?.name ? 'Source: ' + article.source.name : ''}</p>
-      <a href="${article.url}" target="_blank" style="margin-top:4px;font-size:14px;">Read More</a>
+      <p class="small-muted" style="margin:0;color:#777;font-size:12px;">${
+        safeSource ? "Source: " + safeSource : ""
+      }</p>
+      <a href="${article.url}" target="_blank" rel="noopener" style="margin-top:4px;font-size:14px;">Read More</a>
 
       <!-- AI tools -->
       <div class="ai-tools" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
@@ -327,16 +620,19 @@ function renderNewsArticles(articles) {
   });
 
   // Wire AI buttons
-  newsContainer.querySelectorAll('.ai-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
+  newsContainer.querySelectorAll(".ai-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
       const i = parseInt(e.currentTarget.dataset.i, 10);
       const act = e.currentTarget.dataset.act;
-      if (act === 'summary') await summarizeArticle(i);
-      if (act === 'points') await keyPoints(i);
-      if (act === 'sentiment') await sentiment(i);
-      if (act === 'ask') {
-        const q = (document.getElementById(`ask-${i}`)?.value || '').trim();
-        if (!q) { toast("Type a question for AI first."); return; }
+      if (act === "summary") await summarizeArticle(i);
+      if (act === "points") await keyPoints(i);
+      if (act === "sentiment") await sentiment(i);
+      if (act === "ask") {
+        const q = (document.getElementById(`ask-${i}`)?.value || "").trim();
+        if (!q) {
+          toast("Type a question for AI first.");
+          return;
+        }
         await askArticle(i, q);
       }
     });
@@ -348,18 +644,40 @@ function renderNewsArticles(articles) {
    ========================= */
 function handleSelection(command) {
   // Support numbers: digits, English words, basic Hindi words
-  const numberMapEn = { one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10 };
-  const numberMapHi = { "एक":1,"दो":2,"तीन":3,"चार":4,"पांच":5,"छह":6,"सात":7,"आठ":8,"नौ":9,"दस":10 };
+  const numberMapEn = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+  };
+  const numberMapHi = {
+    एक: 1,
+    दो: 2,
+    तीन: 3,
+    चार: 4,
+    पांच: 5,
+    छह: 6,
+    सात: 7,
+    आठ: 8,
+    नौ: 9,
+    दस: 10,
+  };
 
   let indices = [];
 
-  let numMatches = command.match(/\d+/g);
-  if (numMatches) indices.push(...numMatches.map(n => parseInt(n,10) - 1));
+  const numMatches = command.match(/\d+/g);
+  if (numMatches) indices.push(...numMatches.map((n) => parseInt(n, 10) - 1));
 
-  for (let word in numberMapEn) if (command.includes(word)) indices.push(numberMapEn[word]-1);
-  for (let word in numberMapHi) if (command.includes(word)) indices.push(numberMapHi[word]-1);
+  for (let word in numberMapEn) if (command.includes(word)) indices.push(numberMapEn[word] - 1);
+  for (let word in numberMapHi) if (command.includes(word)) indices.push(numberMapHi[word] - 1);
 
-  indices = [...new Set(indices)].filter(i => currentArticles[i]);
+  indices = [...new Set(indices)].filter((i) => currentArticles[i]);
 
   if (indices.length > 0) {
     // Only act on the first valid index in this command
@@ -367,7 +685,7 @@ function handleSelection(command) {
     const article = currentArticles[i];
 
     // Open in a new tab now
-    window.open(article.url, "_blank");
+    window.open(article.url, "_blank", "noopener,noreferrer");
 
     // Ask to read the headline (localized)
     pendingReadText = article.title || "";
@@ -384,22 +702,31 @@ function resetReadConfirm() {
 }
 
 function isAffirmative(text) {
-  return YES_WORDS.some(w => text.includes(w.toLowerCase()));
+  return YES_WORDS.some((w) => text.includes(w.toLowerCase()));
 }
 function isNegative(text) {
-  return NO_WORDS.some(w => text.includes(w.toLowerCase()));
+  return NO_WORDS.some((w) => text.includes(w.toLowerCase()));
 }
 
 function readHeadlines() {
-  if (currentArticles.length === 0) { speak(localize("no_news")); return; }
-  currentArticles.forEach((a, i) => speak(`${i + 1}. ${a.title}`));
+  if (currentArticles.length === 0) {
+    speak(localize("no_news"));
+    return;
+  }
+  // read titles with small spacing
+  (async () => {
+    for (let i = 0; i < currentArticles.length; i++) {
+      const a = currentArticles[i];
+      speak(`${i + 1}. ${a.title}`);
+      await new Promise((r) => setTimeout(r, 600)); // brief gap between items
+    }
+  })();
 }
 
 /* =========================
    GEMINI HELPERS (via serverless)
    ========================= */
 async function callGemini(prompt) {
-  // We’ll POST to /api/gemini with a simple body; serverless will add keys/model.
   const body = {
     model: GEMINI_MODEL,
     prompt,
@@ -408,14 +735,14 @@ async function callGemini(prompt) {
       { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
       { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
       { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" }
-    ]
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+    ],
   };
 
   const res = await fetch("/api/gemini", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) throw new Error("Gemini error: " + res.status);
@@ -426,7 +753,7 @@ async function callGemini(prompt) {
     return data.text.trim();
   }
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  return text.trim();
+  return String(text).trim();
 }
 
 function prepArticleText(a) {
@@ -440,11 +767,16 @@ async function summarizeArticle(i) {
   showOut(i, "Summarizing…");
   try {
     const txt = await callGemini(
-      `Summarize the following news in 3-4 bullet points in plain English.\n\n${prepArticleText(a)}`
+      `Summarize the following news in 3-4 bullet points in plain English.\n\n${prepArticleText(
+        a
+      )}`
     );
     showOut(i, txt, true);
-    speak(`Summary for article ${i+1}.`);
-  } catch (e) { showOut(i, "AI summary failed. Try again later."); }
+    speak(`Summary for article ${i + 1}.`);
+  } catch (e) {
+    console.error(e);
+    showOut(i, "AI summary failed. Try again later.");
+  }
 }
 
 async function keyPoints(i) {
@@ -456,7 +788,10 @@ async function keyPoints(i) {
       `Extract 5 concise key points from this news. Use bullets.\n\n${prepArticleText(a)}`
     );
     showOut(i, txt, true);
-  } catch (e) { showOut(i, "AI key points failed. Try again later."); }
+  } catch (e) {
+    console.error(e);
+    showOut(i, "AI key points failed. Try again later.");
+  }
 }
 
 async function sentiment(i) {
@@ -465,10 +800,15 @@ async function sentiment(i) {
   showOut(i, "Analyzing sentiment…");
   try {
     const txt = await callGemini(
-      `Classify the overall sentiment (Positive/Negative/Neutral) and give one-line justification.\n\n${prepArticleText(a)}`
+      `Classify the overall sentiment (Positive/Negative/Neutral) and give one-line justification.\n\n${prepArticleText(
+        a
+      )}`
     );
     showOut(i, txt, true);
-  } catch (e) { showOut(i, "AI sentiment failed. Try again later."); }
+  } catch (e) {
+    console.error(e);
+    showOut(i, "AI sentiment failed. Try again later.");
+  }
 }
 
 async function askArticle(i, question) {
@@ -477,21 +817,29 @@ async function askArticle(i, question) {
   showOut(i, "Thinking…");
   try {
     const txt = await callGemini(
-      `You are a helpful assistant. Answer the user question using ONLY the information below (title/description). If unknown, say so briefly.\n\nARTICLE:\n${prepArticleText(a)}\n\nQUESTION:\n${question}`
+      `You are a helpful assistant. Answer the user question using ONLY the information below (title/description). If unknown, say so briefly.\n\nARTICLE:\n${prepArticleText(
+        a
+      )}\n\nQUESTION:\n${question}`
     );
     showOut(i, txt, true);
-    speak(`Answer ready for article ${i+1}.`);
-  } catch (e) { showOut(i, "AI Q&A failed. Try again later."); }
+    speak(`Answer ready for article ${i + 1}.`);
+  } catch (e) {
+    console.error(e);
+    showOut(i, "AI Q&A failed. Try again later.");
+  }
 }
 
 function showOut(i, text, format = false) {
   const box = document.getElementById(`out-${i}`);
   if (!box) return;
-  box.style.display = 'block';
-  const content = box.querySelector('.content');
+  box.style.display = "block";
+  const content = box.querySelector(".content");
   content.innerHTML = format ? mdToHtml(text) : escapeHtml(text);
 }
 
+/* =========================
+   MARKDOWN-ish / ESCAPES
+   ========================= */
 function mdToHtml(md) {
   // tiny markdown-ish converter (bullets, newlines)
   const safe = escapeHtml(md)
@@ -499,39 +847,33 @@ function mdToHtml(md) {
     .replace(/\n/g, "<br>");
   return safe;
 }
-function escapeHtml(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (m) => {
+    return (
+      {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;",
+      }[m] || m
+    );
+  });
+}
 
 /* =========================
-   SPEAK / UTIL
+   SOUND (optional)
    ========================= */
-function speak(text) {
+function playSound(type) {
+  // optional: drop your own mp3s (start-sound.mp3 / stop-sound.mp3) in project root
+  const file = type === "start" ? "start-sound.mp3" : "stop-sound.mp3";
   try {
-    let u = new SpeechSynthesisUtterance(text);
-    u.lang = currentLangKey;
-    if (ttsVoice) u.voice = ttsVoice;
-    speechSynthesis.speak(u);
+    const audio = new Audio(file);
+    audio.play().catch(() => {});
   } catch {}
 }
-
-function playSound(type) {
-  // optional: drop your own mp3s in project root
-  const file = type === "start" ? "start-sound.mp3" : "stop-sound.mp3";
-  const audio = new Audio(file);
-  audio.play().catch(()=>{});
-}
-
-function articlesCount(n){ return n===1 ? "1 article" : `${n} articles`; }
-
-function toast(msg, ms=2000){
-  if (!toastEl) return alert(msg);
-  toastEl.textContent = msg;
-  toastEl.classList.remove('hidden');
-  toastEl.classList.add('show');
-  toastEl.style.display = 'block';
-  setTimeout(()=>{
-    toastEl.classList.add('hidden');
-    toastEl.style.display = 'none';
-  }, ms);
+function articlesCount(n) {
+  return n === 1 ? "1 article" : `${n} articles`;
 }
 
 /* =========================
@@ -549,8 +891,25 @@ function localize(key, vars = {}) {
       invalid_selection: "Invalid selection. Please say a valid number.",
       fetched_count: `Fetched ${vars.n || 0} articles.`,
       no_news: "No news loaded yet.",
-      error_news: "Error fetching news."
-    }
+      error_news: "Error fetching news.",
+    },
   };
   return (strings[lang] && strings[lang][key]) || strings.en[key] || "";
 }
+
+/* =========================
+   STARTUP HINT (optional)
+   ========================= */
+window.addEventListener("load", () => {
+  // If browser lacks recognition support, disable Speak button gracefully
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    setMic("idle");
+    if (startBtn) {
+      startBtn.disabled = true;
+      startBtn.style.opacity = "0.6";
+      startBtn.style.cursor = "not-allowed";
+    }
+    toast("❌ Speech Recognition not supported in this browser.");
+  }
+});
