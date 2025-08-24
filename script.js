@@ -1,13 +1,14 @@
 /* =========================
-   CONFIG
+   CONFIG (serverless-friendly)
    ========================= */
-// GNews API Key
-const API_KEY = "e4ed7150d90492b1f11a172f121448e6";
-
-// Gemini API
-const GEMINI_API_KEY = "AIzaSyBRTT9x4VlmQoz3Vhxowljt11wLe6pK3mw";
+// ⚠️ Keys are no longer stored in the frontend.
+// Put your keys server-side in /api/gnews and /api/gemini.
+// Kept constants for model name only:
 const GEMINI_MODEL = "gemini-1.5-flash-latest";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+
+// Minimal LANGS guard so localize() can read it safely
+// (If you already define LANGS elsewhere, this will just be harmless.)
+const LANGS = typeof LANGS !== "undefined" ? LANGS : { "en-US": { lang: "en" } };
 
 /* =========================
    ENGLISH INTENTS ONLY
@@ -207,7 +208,7 @@ function setMic(state) {
 }
 
 /* =========================
-   NEWS FETCH (GNews)
+   NEWS FETCH (GNews via serverless)
    ========================= */
 function handleCommand(command) {
   const lang = "en";
@@ -217,20 +218,21 @@ function handleCommand(command) {
   const categories = ["business","entertainment","general","health","science","sports","technology"];
   const sources = ["cnn","bbc","wired","time","ign","buzzfeed","abc"];
 
+  // Build GNews URLs WITHOUT token (serverless adds it)
   if (INTENTS.latest.some(k => command.includes(k))) {
-    url = `https://gnews.io/api/v4/top-headlines?lang=${lang}&country=${country}&max=10&token=${API_KEY}`;
+    url = `https://gnews.io/api/v4/top-headlines?lang=${lang}&country=${country}&max=10`;
   }
 
   if (!url && command.includes("news from")) {
     let foundSource = sources.find(src => command.includes(src));
-    if (foundSource) url = `https://gnews.io/api/v4/top-headlines?source=${foundSource}&lang=${lang}&country=${country}&max=10&token=${API_KEY}`;
+    if (foundSource) url = `https://gnews.io/api/v4/top-headlines?source=${foundSource}&lang=${lang}&country=${country}&max=10`;
   }
 
   if (!url) {
     for (let cat of categories) {
       const hit = INTENTS.categories[cat].some(k => command.includes(k));
       if (hit) {
-        url = `https://gnews.io/api/v4/top-headlines?category=${cat}&lang=${lang}&country=${country}&max=10&token=${API_KEY}`;
+        url = `https://gnews.io/api/v4/top-headlines?category=${cat}&lang=${lang}&country=${country}&max=10`;
         break;
       }
     }
@@ -239,7 +241,7 @@ function handleCommand(command) {
   if (!url && (command.includes("about") || command.includes("on") || command.includes("for") || command.includes("regarding"))) {
     let term = command.replace(/news|about|on|for|regarding/gi, "").trim();
     if (term) {
-      url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(term)}&lang=${lang}&country=${country}&max=10&token=${API_KEY}`;
+      url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(term)}&lang=${lang}&country=${country}&max=10`;
     }
   }
 
@@ -254,8 +256,10 @@ async function fetchNewsByUrl(url) {
   newsContainer.style.gap = '16px';
 
   try {
-    let res = await fetch(url);
-    let data = await res.json();
+    // Call your serverless proxy instead of hitting GNews directly
+    const res = await fetch(`/api/gnews?url=${encodeURIComponent(url)}`);
+    if (!res.ok) throw new Error(`GNews proxy error: ${res.status}`);
+    const data = await res.json();
 
     if (!data.articles || data.articles.length === 0) {
       newsContainer.innerHTML = '<p style="padding:10px;">No news articles found.</p>';
@@ -275,11 +279,9 @@ async function fetchNewsByUrl(url) {
   }
 }
 
-// (Rendering, selection, Gemini AI helpers, speak, etc. remain the same as your code — but now all English only)
-
-
-
-
+/* =========================
+   RENDER
+   ========================= */
 function renderNewsArticles(articles) {
   newsContainer.innerHTML = '';
   // enforce 2 per row grid each time (in case external CSS overwrites)
@@ -394,15 +396,14 @@ function readHeadlines() {
 }
 
 /* =========================
-   GEMINI HELPERS
+   GEMINI HELPERS (via serverless)
    ========================= */
 async function callGemini(prompt) {
-  if (!GEMINI_API_KEY || GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE") {
-    toast("Add your Gemini API key in script.js to use AI features.");
-    throw new Error("No Gemini key");
-  }
+  // We’ll POST to /api/gemini with a simple body; serverless will add keys/model.
   const body = {
-    contents: [{ parts: [{ text: prompt }]}],
+    model: GEMINI_MODEL,
+    prompt,
+    // keep your original safety settings semantics; serverless can use/ignore
     safetySettings: [
       { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
       { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -410,13 +411,20 @@ async function callGemini(prompt) {
       { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" }
     ]
   };
-  const res = await fetch(GEMINI_URL, {
+
+  const res = await fetch("/api/gemini", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
+
   if (!res.ok) throw new Error("Gemini error: " + res.status);
   const data = await res.json();
+
+  // Support either a simplified {text} shape OR the raw Gemini {candidates} shape.
+  if (typeof data.text === "string" && data.text.trim()) {
+    return data.text.trim();
+  }
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
   return text.trim();
 }
@@ -544,5 +552,5 @@ function localize(key, vars = {}) {
       error_news: "Error fetching news."
     }
   };
-  return strings[lang][key] || strings.en[key] || "";
+  return (strings[lang] && strings[lang][key]) || strings.en[key] || "";
 }
