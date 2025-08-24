@@ -55,14 +55,14 @@ body {
 .mini-btn.danger { border-color:#7a2f2f; background:#3a1f1f; }
 .mini-btn.danger:hover { background:#4b2525; }
 
-.lang-wrap{
+/* .lang-wrap{
   display:flex; align-items:center; gap:6px; background:#222; border:1px solid #444;
   padding:6px 10px; border-radius:10px; height:44px;
 }
 #lang-select{
   appearance:none; background:transparent; color:#e7e7e7; border:none; outline:none; font-size:14px;
 }
-#lang-select option{ color:#111; }
+#lang-select option{ color:#111; } */
 
 #spoken-text {
   height: 50px; width: 320px; border-radius: 8px; font-size: 15px; padding: 0 8px;
