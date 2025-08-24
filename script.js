@@ -1,63 +1,33 @@
 /* =========================
    CONFIG
    ========================= */
-// GNews API Key (yours as you used before)
-const API_KEY = "";
+// GNews API Key
+const API_KEY = "e4ed7150d90492b1f11a172f121448e6";
 
-// Gemini API (frontend demo — you used this before)
-const GEMINI_API_KEY = "";
+// Gemini API
+const GEMINI_API_KEY = "AIzaSyBRTT9x4VlmQoz3Vhxowljt11wLe6pK3mw";
 const GEMINI_MODEL = "gemini-1.5-flash-latest";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
-/* Language map for recognition + GNews params (English + Hindi only) */
-const LANGS = {
-  "en-US": { lang: "en", country: "us", label: "English (US)" },
-  "hi-IN": { lang: "hi", country: "in", label: "Hindi (India)" },
-};
-
 /* =========================
-   ENGLISH + HINDI INTENTS
+   ENGLISH INTENTS ONLY
    ========================= */
 const INTENTS = {
-  latest: {
-    en: ["latest news","headlines","breaking news","top news"],
-    hi: ["ताज़ा खबर","मुख्य समाचार","ब्रेकिंग न्यूज़","आज की खबरें"]
-  },
+  latest: ["latest news","headlines","breaking news","top news"],
   categories: {
-    business: {
-      en: ["business"],
-      hi: ["व्यापार","बिजनेस"]
-    },
-    entertainment: {
-      en: ["entertainment"],
-      hi: ["मनोरंजन"]
-    },
-    general: {
-      en: ["general"],
-      hi: ["सामान्य","मुख्य"]
-    },
-    health: {
-      en: ["health"],
-      hi: ["स्वास्थ्य"]
-    },
-    science: {
-      en: ["science"],
-      hi: ["विज्ञान"]
-    },
-    sports: {
-      en: ["sports"],
-      hi: ["खेल","क्रिकेट","फुटबॉल"]
-    },
-    technology: {
-      en: ["technology"],
-      hi: ["तकनीक","प्रौद्योगिकी"]
-    }
+    business: ["business"],
+    entertainment: ["entertainment"],
+    general: ["general"],
+    health: ["health"],
+    science: ["science"],
+    sports: ["sports","cricket","football"],
+    technology: ["technology"]
   }
 };
 
-/* For yes/no confirmation (EN + HI) */
-const YES_WORDS = ["yes","yeah","yup","sure","ok","okay","haan","हाँ","जी हाँ","haan ji","haa"];
-const NO_WORDS  = ["no","nope","nah","nahi","नहीं","जी नहीं","nai","nahin"];
+/* For yes/no confirmation */
+const YES_WORDS = ["yes","yeah","yup","sure","ok","okay"];
+const NO_WORDS  = ["no","nope","nah"];
 
 /* =========================
    DOM
@@ -65,7 +35,6 @@ const NO_WORDS  = ["no","nope","nah","nahi","नहीं","जी नहीं"
 const startBtn = document.getElementById('start-btn');
 const pauseBtn = document.getElementById('pause-btn');
 const stopBtn  = document.getElementById('stop-btn');
-const langSelect = document.getElementById('lang-select');
 
 const newsContainer = document.getElementById('news-container');
 const micBadge = document.getElementById('mic-status');
@@ -74,9 +43,8 @@ const toastEl = document.getElementById('toast');
 let recognition;
 let currentArticles = [];
 let isListening = false;
-let openedTab = null; // no longer auto-created; used only when selecting
 let isPaused = false;
-let currentLangKey = langSelect ? langSelect.value : "en-US";
+let currentLangKey = "en-US";
 
 /* Ask-to-read state */
 let awaitingReadConfirm = false;
@@ -110,11 +78,10 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
   startBtn.addEventListener('click', () => {
     if (!isListening) {
       isListening = true;
-      recognition.lang = currentLangKey; // ensure up-to-date
+      recognition.lang = currentLangKey;
       recognition.start();
       setMic('live');
       startBtn.innerHTML = '<p class="content">🎙 Listening...</p>';
-      // ❌ removed: openedTab = window.open("about:blank", "_blank");
       playSound("start");
     }
   });
@@ -126,12 +93,12 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
         isPaused = true;
         setMic('paused');
         pauseBtn.textContent = "▶️ Resume";
-        speak(localize("paused"));
+        speak("Listening paused.");
       } else {
         isPaused = false;
         setMic('live');
         pauseBtn.textContent = "⏸️ Pause";
-        speak(localize("resumed"));
+        speak("Resumed listening.");
       }
     });
   }
@@ -140,31 +107,21 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
     stopBtn.addEventListener('click', () => stopListening());
   }
 
-  if (langSelect){
-    langSelect.addEventListener('change', () => {
-      currentLangKey = langSelect.value || "en-US";
-      updateRecognitionLang();
-      const l = LANGS[currentLangKey];
-      toast(`Language set to ${l?.label || currentLangKey}.`);
-    });
-  }
-
   recognition.addEventListener('result', (event) => {
     const speechResult = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
     const spokenBox = document.getElementById("spoken-text");
     if (spokenBox) spokenBox.value = speechResult;
     console.log("Heard:", speechResult);
 
-    // If we are waiting for yes/no, handle that first
     if (awaitingReadConfirm) {
       if (isAffirmative(speechResult)) {
         if (pendingReadText) speak(pendingReadText);
         resetReadConfirm();
       } else if (isNegative(speechResult)) {
-        speak(localize("ok"));
+        speak("Okay.");
         resetReadConfirm();
       }
-      return; // do not process other commands while waiting
+      return;
     }
 
     if (speechResult.includes("stop listening") || speechResult === "stop") {
@@ -175,25 +132,23 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       isPaused = true;
       setMic('paused');
       if (pauseBtn) pauseBtn.textContent = "▶️ Resume";
-      speak(localize("paused_long"));
+      speak("Listening paused. Say 'resume listening' to continue.");
       return;
     }
     if (speechResult.includes("resume listening")) {
       isPaused = false;
       setMic('live');
       if (pauseBtn) pauseBtn.textContent = "⏸️ Pause";
-      speak(localize("resumed"));
+      speak("Resumed listening.");
       return;
     }
     if (isPaused) return;
 
-    // Voice features
     if (speechResult.includes("read the headlines")) {
       readHeadlines();
       return;
     }
 
-    // Summarize article N
     const sumMatch = speechResult.match(/summarize (article )?(\d+)/);
     if (sumMatch) {
       const idx = parseInt(sumMatch[2], 10) - 1;
@@ -201,33 +156,25 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       return;
     }
 
-    // Open/select article N (supports digits + English words + basic Hindi numerals)
-    if (speechResult.match(/(select|open)\s*\d+/) || speechResult.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/) ||
-        speechResult.match(/(select|open)\s*(एक|दो|तीन|चार|पांच|छह|सात|आठ|नौ|दस)/)) {
+    if (speechResult.match(/(select|open)\s*\d+/) || speechResult.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/)) {
       handleSelection(speechResult);
       return;
     }
 
-    // Fetch news intents (EN + HI)
     if (
-      INTENTS.latest["en"].some(k => speechResult.includes(k)) ||
-      INTENTS.latest["hi"].some(k => speechResult.includes(k)) ||
-      Object.values(INTENTS.categories).some(cat =>
-        (cat.en && cat.en.some(k => speechResult.includes(k))) ||
-        (cat.hi && cat.hi.some(k => speechResult.includes(k)))
-      ) ||
-      speechResult.includes("news") || speechResult.includes("समाचार") || speechResult.includes("खबर")
+      INTENTS.latest.some(k => speechResult.includes(k)) ||
+      Object.values(INTENTS.categories).some(cat => cat.some(k => speechResult.includes(k))) ||
+      speechResult.includes("news")
     ) {
       handleCommand(speechResult);
       return;
     }
 
-    // Unknown
     toast("❌ Command not recognized. Try: 'latest news', 'read the headlines', 'summarize 2', or 'open 3'.");
   });
 
   recognition.addEventListener('end', () => {
-    if (isListening) recognition.start(); // auto-restart for hands-free
+    if (isListening) recognition.start();
   });
 
   recognition.onerror = (event) => {
@@ -252,13 +199,6 @@ function stopListening() {
   console.log("Stopped listening");
 }
 
-function updateRecognitionLang(){
-  try{
-    if (recognition) recognition.lang = currentLangKey;
-    refreshVoices();
-  }catch{}
-}
-
 function setMic(state) {
   if (!micBadge) return;
   micBadge.classList.remove('idle', 'live', 'paused');
@@ -270,29 +210,25 @@ function setMic(state) {
    NEWS FETCH (GNews)
    ========================= */
 function handleCommand(command) {
-  const lc = LANGS[currentLangKey] || LANGS["en-US"];
-  const lang = lc.lang;     // "en" or "hi"
-  const country = lc.country;
+  const lang = "en";
+  const country = "us";
 
   let url = "";
-  const categories = ["business", "entertainment", "general", "health", "science", "sports", "technology"];
-  const sources = ["cnn", "bbc", "wired", "time", "ign", "buzzfeed", "abc"];
+  const categories = ["business","entertainment","general","health","science","sports","technology"];
+  const sources = ["cnn","bbc","wired","time","ign","buzzfeed","abc"];
 
-  // --- Latest/top/breaking (multi-lingual via INTENTS) ---
-  if (INTENTS.latest[lang]?.some(k => command.includes(k))) {
+  if (INTENTS.latest.some(k => command.includes(k))) {
     url = `https://gnews.io/api/v4/top-headlines?lang=${lang}&country=${country}&max=10&token=${API_KEY}`;
   }
 
-  // --- Specific source in English (keep original feature) ---
   if (!url && command.includes("news from")) {
     let foundSource = sources.find(src => command.includes(src));
     if (foundSource) url = `https://gnews.io/api/v4/top-headlines?source=${foundSource}&lang=${lang}&country=${country}&max=10&token=${API_KEY}`;
   }
 
-  // --- Category (EN + HI) ---
   if (!url) {
     for (let cat of categories) {
-      const hit = (INTENTS.categories[cat]?.[lang] || []).some(k => command.includes(k));
+      const hit = INTENTS.categories[cat].some(k => command.includes(k));
       if (hit) {
         url = `https://gnews.io/api/v4/top-headlines?category=${cat}&lang=${lang}&country=${country}&max=10&token=${API_KEY}`;
         break;
@@ -300,82 +236,47 @@ function handleCommand(command) {
     }
   }
 
-  // --- Generic search (English + Hindi) ---
-  if (!url && (
-    command.includes("about") || command.includes("on") || command.includes("for") || command.includes("regarding") ||
-    command.includes("के बारे में") || command.includes("समाचार") || command.includes("खबर")
-  )) {
-    let term = command
-      .replace(/news|about|on|for|regarding|के बारे में|समाचार|खबर/gi, "")
-      .trim();
+  if (!url && (command.includes("about") || command.includes("on") || command.includes("for") || command.includes("regarding"))) {
+    let term = command.replace(/news|about|on|for|regarding/gi, "").trim();
     if (term) {
       url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(term)}&lang=${lang}&country=${country}&max=10&token=${API_KEY}`;
     }
   }
 
   if (url) fetchNewsByUrl(url);
-  else toast("❌ Sorry, I couldn't understand. Try 'latest news', 'technology news', 'news about bitcoin', or 'क्रिकेट समाचार'.");
+  else toast("❌ Sorry, I couldn't understand. Try 'latest news', 'technology news', or 'news about bitcoin'.");
 }
 
 async function fetchNewsByUrl(url) {
-  // Show loading
   newsContainer.innerHTML = '<p style="padding:10px;">Loading news...</p>';
   newsContainer.style.display = 'grid';
   newsContainer.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
   newsContainer.style.gap = '16px';
 
   try {
-    const lc = LANGS[currentLangKey];
-    let lang = lc?.lang || "en";
-
     let res = await fetch(url);
     let data = await res.json();
 
-    // ✅ If Hindi chosen and no articles found → fallback to English
-    if ((!data.articles || data.articles.length === 0) && lang === "hi") {
-      const fallbackUrl = url.replace("lang=hi", "lang=en");
-      console.log("⚠️ No Hindi articles. Falling back to English:", fallbackUrl);
-      res = await fetch(fallbackUrl);
-      data = await res.json();
-    }
-
     if (!data.articles || data.articles.length === 0) {
       newsContainer.innerHTML = '<p style="padding:10px;">No news articles found.</p>';
-      speak(localize("no_news"));
+      speak("No news loaded yet.");
       return;
     }
 
-    let articles = data.articles;
-
-    // 🔥 If Hindi selected → translate fetched (English) articles
-    if (lang === "hi") {
-      for (let i = 0; i < articles.length; i++) {
-        const a = articles[i];
-        try {
-          const translated = await callGemini(
-            `Translate this news headline and description into Hindi:\n\nTITLE: ${a.title || ""}\n\nDESCRIPTION: ${a.description || ""}`
-          );
-          // Simple split: first line = title, rest = description
-          const [firstLine, ...rest] = translated.split("\n");
-          a.title = firstLine.trim() || a.title;
-          a.description = rest.join(" ").trim() || a.description;
-        } catch (e) {
-          console.error("Translation failed for article", i, e);
-        }
-      }
-    }
-
-    currentArticles = articles;
-    renderNewsArticles(articles);
-    speak(localize("fetched_count", { n: articles.length }));
+    currentArticles = data.articles;
+    renderNewsArticles(currentArticles);
+    speak(`Fetched ${currentArticles.length} articles.`);
     setTimeout(() => newsContainer.scrollIntoView({ behavior: 'smooth' }), 200);
 
   } catch (err) {
     console.error('Error fetching news:', err);
     newsContainer.innerHTML = '<p style="padding:10px;">Error fetching news. Try again later.</p>';
-    speak(localize("error_news"));
+    speak("Error fetching news.");
   }
 }
+
+// (Rendering, selection, Gemini AI helpers, speak, etc. remain the same as your code — but now all English only)
+
 
 
 
@@ -641,19 +542,7 @@ function localize(key, vars = {}) {
       fetched_count: `Fetched ${vars.n || 0} articles.`,
       no_news: "No news loaded yet.",
       error_news: "Error fetching news."
-    },
-    hi: {
-      paused: "सुनना रोक दिया गया है।",
-      paused_long: "सुनना रोक दिया गया है। जारी रखने के लिए 'resume listening' कहें।",
-      resumed: "सुनना फिर से शुरू हुआ।",
-      ask_read: "क्या मैं शीर्षक पढ़ दूँ?",
-      ok: "ठीक है।",
-      invalid_selection: "गलत चयन। कृपया सही नंबर बोलें।",
-      fetched_count: `${vars.n || 0} खबरें मिलीं।`,
-      no_news: "अभी कोई खबर लोड नहीं है।",
-      error_news: "खबरें लाने में समस्या हुई।"
     }
   };
   return strings[lang][key] || strings.en[key] || "";
 }
-
