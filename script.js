@@ -35,12 +35,19 @@ const NO_WORDS = ["no", "nope", "nah"];
 const startBtn = document.getElementById("start-btn");
 const pauseBtn = document.getElementById("pause-btn");
 const stopBtn = document.getElementById("stop-btn");
-// if you had a <select id="lang-select"> remove it from UI; we force en-US anyway
-const langSelect = document.getElementById("lang-select");
-
 const newsContainer = document.getElementById("news-container");
 const micBadge = document.getElementById("mic-status");
 const toastEl = document.getElementById("toast");
+
+// Transcript div to show recognized text
+let transcriptEl = document.getElementById("transcript");
+if (!transcriptEl) {
+  transcriptEl = document.createElement("div");
+  transcriptEl.id = "transcript";
+  transcriptEl.style.cssText =
+    "padding:6px 10px; border:1px solid #ccc; min-height:24px; margin-bottom:8px;";
+  document.body.insertBefore(transcriptEl, newsContainer);
+}
 
 let recognition;
 let currentArticles = [];
@@ -115,17 +122,14 @@ if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
     stopBtn.addEventListener("click", () => stopListening());
   }
 
-  // If a lang select still exists, lock it to English and disable it
-  if (langSelect) {
-    langSelect.value = "en-US";
-    langSelect.disabled = true;
-  }
-
   recognition.addEventListener("result", (event) => {
     const speechResult =
       event.results[event.results.length - 1][0].transcript
         .toLowerCase()
         .trim();
+
+    // Show live transcript
+    transcriptEl.textContent = speechResult;
     console.log("Heard:", speechResult);
 
     // Handle pending yes/no confirmation first
@@ -175,7 +179,7 @@ if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
       return;
     }
 
-    // Open/select article N (digits + English words)
+    // Open/select article N
     if (
       speechResult.match(/(select|open)\s*\d+/) ||
       speechResult.match(
@@ -186,7 +190,7 @@ if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
       return;
     }
 
-    // Fetch news intents (English only)
+    // Fetch news intents
     if (
       INTENTS.latest.some((k) => speechResult.includes(k)) ||
       Object.values(INTENTS.categories).some((cat) =>
@@ -216,6 +220,9 @@ if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
   alert("Speech Recognition not supported in your browser.");
 }
 
+/* =========================
+   UTILS
+   ========================= */
 function stopListening() {
   isListening = false;
   isPaused = false;
@@ -225,15 +232,9 @@ function stopListening() {
   setMic("idle");
   startBtn.innerHTML = '<p class="content">🎤 Speak</p>';
   if (pauseBtn) pauseBtn.textContent = "⏸️ Pause";
+  transcriptEl.textContent = "";
   playSound("stop");
   console.log("Stopped listening");
-}
-
-function updateRecognitionLang() {
-  try {
-    if (recognition) recognition.lang = currentLangKey;
-    refreshVoices();
-  } catch {}
 }
 
 function setMic(state) {
@@ -243,6 +244,27 @@ function setMic(state) {
   micBadge.textContent =
     state === "live" ? "● listening" : state === "paused" ? "● paused" : "● idle";
 }
+
+function isAffirmative(text) {
+  return YES_WORDS.some((w) => text.includes(w.toLowerCase()));
+}
+function isNegative(text) {
+  return NO_WORDS.some((w) => text.includes(w.toLowerCase()));
+}
+
+function resetReadConfirm() {
+  awaitingReadConfirm = false;
+  pendingReadText = "";
+}
+
+/* =========================
+   NEWS / AI LOGIC (unchanged)
+   ========================= */
+// handleCommand(), fetchNewsByUrl(), renderNewsArticles(), handleSelection(),
+// summarizeArticle(), keyPoints(), sentiment(), askArticle(), etc.
+// keep as in your current code
+
+
 
 /* =========================
    NEWS FETCH (serverless)
@@ -605,3 +627,4 @@ function toast(msg, ms = 2000) {
     toastEl.style.display = "none";
   }, ms);
 }
+
